@@ -13,9 +13,10 @@
 #include "stm32746g_discovery_lcd.h"
 #include "stm32746g_discovery_ts.h"
 
+float inter_test=0 , optime=0;
 uint16_t GYRO_X=0,GYRO_Y=0,GYRO_Z=0,ACCEL_X=0,ACCEL_Y=0,ACCEL_Z=0,Temp=0;
-int GYRO_XR[2],GYRO_YR[2],GYRO_ZR[2],ACCEL_XR[2],ACCEL_YR[2],ACCEL_ZR[2];
-int GYRO_XRini[2],GYRO_YRini[2],GYRO_ZRini[2],ACCEL_XRini[2],ACCEL_YRini[2],ACCEL_ZRini[2];
+float GYRO_XR,GYRO_YR,GYRO_ZR,ACCEL_XR,ACCEL_YR,ACCEL_ZR=-9.8;
+float GYRO_XRini,GYRO_YRini,GYRO_ZRini,ACCEL_XRini,ACCEL_YRini,ACCEL_ZRini;
 float TempR;
 I2C_HandleTypeDef hi2c1;
 uint32_t uwPrescalerValue = 0;
@@ -26,18 +27,17 @@ TIM_HandleTypeDef    TimHandle;
 #define LCD_FRAME_BUFFER				SDRAM_DEVICE_ADDR
 #define RGB565_BYTE_PER_PIXEL			2
 #define ARBG8888_BYTE_BYTE_PER_PIXEL	4
-char buffer[30];
+char buffer[50];
 int i=0;
 
 void SetInitialState();
 void I2C_Get_Data();
 void Data_Processing();
 void zero();
-void ACCEL_Translate(uint16_t value,int32_t a[]);
-void GYRO_Translate(uint16_t value,int32_t a[]);
-void SystemClock_Config(void);
-void Error_Handler(void);
-void CPU_CACHE_Enable(void);
+float Translate(uint16_t value,float range ,float privious,int filter);
+static void SystemClock_Config(void);
+static void Error_Handler(void);
+static void CPU_CACHE_Enable(void);
 void MyI2C_Init(void);
 void LCD_9250_Data();
 void LCD_Start();
@@ -52,7 +52,7 @@ int main(void)
   /* Set TIMx instance */
   __TIM2_CLK_ENABLE();
   TimHandle.Instance = TIM2;
-  TimHandle.Init.Period            = 10000-1;
+  TimHandle.Init.Period            = 1000-1;
   TimHandle.Init.Prescaler         = uwPrescalerValue;
   TimHandle.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
   TimHandle.Init.CounterMode       = TIM_COUNTERMODE_UP;
@@ -84,18 +84,12 @@ int main(void)
   I2C_Get_Data();
   Data_Processing();
   LCD_Start();
-  GYRO_XRini[0]=GYRO_XR[0];
-  GYRO_XRini[1]=GYRO_XR[1];
-  GYRO_YRini[0]=GYRO_YR[0];
-  GYRO_YRini[1]=GYRO_YR[1];
-  GYRO_ZRini[0]=GYRO_ZR[0];
-  GYRO_ZRini[1]=GYRO_ZR[1];
-  ACCEL_XRini[0]=ACCEL_XR[0];
-  ACCEL_XRini[1]=ACCEL_XR[1];
-  ACCEL_YRini[0]=ACCEL_YR[0];
-  ACCEL_YRini[1]=ACCEL_YR[1];
-  ACCEL_ZRini[0]=ACCEL_ZR[0];
-  ACCEL_ZRini[1]=ACCEL_ZR[1];
+  GYRO_XRini=GYRO_XR;
+  GYRO_YRini=GYRO_YR;
+  GYRO_ZRini=GYRO_ZR;
+  ACCEL_XRini=ACCEL_XR;
+  ACCEL_YRini=ACCEL_YR;
+  ACCEL_ZRini=ACCEL_ZR;
 
   //ACCEL_YRini=ACCEL_ZR,ACCEL_ZRini=ACCEL_ZR;
   while (1)
@@ -105,7 +99,6 @@ int main(void)
 	  Data_Processing();
 	  zero();
 	  LCD_9250_Data();
-
   }
 }
 static void SystemClock_Config(void)
@@ -153,10 +146,11 @@ void TIM2_IRQHandler() {
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-	sprintf(buffer,"Timer OK!!%d",i);
-     BSP_LCD_DisplayStringAtLine(10, buffer);
-     i++;
-     if (i>1000) i=0;
+
+	  optime=optime+0.1;
+	  inter_test=inter_test+GYRO_ZR*0.1;
+	  sprintf(buffer,"  Yaw=%2g        ",inter_test);
+	  BSP_LCD_DisplayStringAtLine(10, buffer);
 
 }
 
@@ -201,9 +195,9 @@ BSP_LCD_Init();
 BSP_LCD_LayerDefaultInit(LTDC_ACTIVE_LAYER,LCD_FRAME_BUFFER);
 BSP_LCD_SetLayerVisible(LTDC_ACTIVE_LAYER,ENABLE);
 BSP_LCD_SelectLayer(LTDC_ACTIVE_LAYER);
-BSP_LCD_Clear(LCD_COLOR_BLACK);
-BSP_LCD_SetBackColor(LCD_COLOR_BLACK);
-BSP_LCD_SetTextColor(LCD_COLOR_GREEN);
+BSP_LCD_Clear(LCD_COLOR_BLUE);
+BSP_LCD_SetBackColor(LCD_COLOR_BLUE);
+BSP_LCD_SetTextColor(LCD_COLOR_WHITE);
 BSP_LCD_DisplayOn();
 }
 
@@ -399,64 +393,40 @@ void I2C_Get_Data(){ //Get mean of five Datas.
 		GYRO_X=GYRO_X+(GYRO_Xtemp/5);
 		GYRO_Y=GYRO_Y+(GYRO_Ytemp/5);
 		GYRO_Z=GYRO_Z+(GYRO_Ztemp/5);
-
-
 		HAL_Delay(10);
 	}
 }
 
 void Data_Processing(){
 
-	ACCEL_Translate(ACCEL_X,ACCEL_XR);
-	ACCEL_Translate(ACCEL_Y,ACCEL_YR);
-	ACCEL_Translate(ACCEL_Z,ACCEL_ZR);
-	GYRO_Translate(GYRO_X,GYRO_XR);
-	GYRO_Translate(GYRO_Y,GYRO_YR);
-	GYRO_Translate(GYRO_Z, GYRO_ZR);
+	ACCEL_XR=Translate(ACCEL_X,19.6,ACCEL_XR,5);
+	ACCEL_YR=Translate(ACCEL_Y,19.6,ACCEL_YR,5);
+	ACCEL_ZR=Translate(ACCEL_Z,19.6,ACCEL_ZR,5);
+	GYRO_XR=Translate(GYRO_X, 250,GYRO_XR,50);
+	GYRO_YR=Translate(GYRO_Y, 250,GYRO_YR,50);
+	GYRO_ZR=Translate(GYRO_Z,250,GYRO_ZR,50);
 	TempR=21 + ( Temp / 333.87 );
 }
 
 void zero(){
-	GYRO_XR[0]=GYRO_XR[0]-GYRO_XRini[0];
-	GYRO_XR[1]=GYRO_XR[1]-GYRO_XRini[1];
-	GYRO_YR[0]=GYRO_YR[0]-GYRO_YRini[0];
-	GYRO_YR[1]=GYRO_YR[1]-GYRO_YRini[1];
-	GYRO_ZR[0]=GYRO_ZR[0]-GYRO_ZRini[0];
-	GYRO_ZR[1]=GYRO_ZR[1]-GYRO_ZRini[1];
-	ACCEL_XR[0]=ACCEL_XR[0]-ACCEL_XRini[0];
-	ACCEL_XR[1]=ACCEL_XR[1]-ACCEL_XRini[1];
-	ACCEL_YR[0]=ACCEL_YR[0]-ACCEL_YRini[0];
-	ACCEL_YR[1]=ACCEL_YR[1]-ACCEL_YRini[1];
-	ACCEL_ZR[0]=ACCEL_ZR[0]-ACCEL_ZRini[0]-9;
-	ACCEL_ZR[1]=ACCEL_ZR[1]-ACCEL_ZRini[1]+800;
-	if(GYRO_XR[1]<0)GYRO_XR[1]=-GYRO_XR[1];
-	if(GYRO_YR[1]<0)GYRO_YR[1]=-GYRO_YR[1];
-	if(GYRO_ZR[1]<0)GYRO_ZR[1]=-GYRO_ZR[1];
-	if(ACCEL_XR[1]<0)ACCEL_XR[1]=-ACCEL_XR[1];
-	if(ACCEL_YR[1]<0)ACCEL_YR[1]=-ACCEL_YR[1];
+	GYRO_XR=GYRO_XR-GYRO_XRini;
+	GYRO_YR=GYRO_YR-GYRO_YRini;
+	GYRO_ZR=GYRO_ZR-GYRO_ZRini;
+	ACCEL_XR=ACCEL_XR-ACCEL_XRini;
+	ACCEL_YR=ACCEL_YR-ACCEL_YRini;
+	ACCEL_ZR=ACCEL_ZR-ACCEL_ZRini-9.8;
 }
 
-void ACCEL_Translate(uint16_t value,int32_t a[]){
-	int32_t result=0;
-	if((value-0)<=32767)
-		result=(value)*19.6*1000/32767;
+float Translate(uint16_t value , float range ,float privious,int filter){
+	float a=0;
+	if((value)<=32767)
+		a=-value*range/32767;
 	else
-		result=((value)-65535)*19.6*1000/32767;
-	a[0]=-result/1000;
-	a[1]=result%1000;
-	if (a[1]<0)a[1]=-a[1];
+		a=-(value-65535)*range/32767;
+	if((a-privious)>filter||(a-privious)<-filter) a=privious;
+	return a;
 }
 
-void GYRO_Translate(uint16_t value,int32_t a[]){
-	int32_t result=0;
-	if((value-0)<=32767)
-		result=(value)*500*1000/32767;
-	else
-		result=((value)-65535)*500*1000/32767;
-	a[0]=-result/1000;
-	a[1]=result%1000;
-	if (a[1]<0)a[1]=-a[1];
-}
 
 static void Error_Handler(void)
 {
@@ -480,24 +450,24 @@ static void CPU_CACHE_Enable(void)
 
 void LCD_9250_Data(){
 
-	  sprintf(buffer,"MPU9250 DATA:");
+	  sprintf(buffer,"MPU9250 DATA:     %g",optime);
 	  BSP_LCD_DisplayStringAtLine(0, buffer);
 	  sprintf(buffer,"  Accelerometer:");
 	  BSP_LCD_DisplayStringAtLine(1, buffer);
-	  sprintf(buffer,"    ax=%3d.%3d(m/s^2)        ",ACCEL_XR[0],ACCEL_XR[1]);
+	  sprintf(buffer,"    ax=%3g(m/s^2)         ",ACCEL_XR);
 	  BSP_LCD_DisplayStringAtLine(2, buffer);
-	  sprintf(buffer,"    ay=%3d.%3d(m/s^2)        ",ACCEL_YR[0],ACCEL_YR[1]);
+	  sprintf(buffer,"    ay=%3g(m/s^2)        ",ACCEL_YR);
 	  BSP_LCD_DisplayStringAtLine(3, buffer);
-	  sprintf(buffer,"    az=%3d.%3d(m/s^2)        ",ACCEL_ZR[0],ACCEL_ZR[1]);
+	  sprintf(buffer,"    az=%3g(m/s^2)        ",ACCEL_ZR);
 	  BSP_LCD_DisplayStringAtLine(4, buffer);
 
 	  sprintf(buffer,"  GYRO:");
 	  BSP_LCD_DisplayStringAtLine(5, buffer);
-	  sprintf(buffer,"    Vx=%3d.%3d(DPS)        ",GYRO_XR[0],GYRO_XR[1]);
+	  sprintf(buffer,"    Vx=%3g(DPS)        ",GYRO_XR);
 	  BSP_LCD_DisplayStringAtLine(6, buffer);
-	  sprintf(buffer,"    Vy=%3d.%3d(DPS)        ",GYRO_YR[0],GYRO_YR[1]);
+	  sprintf(buffer,"    Vy=%3g(DPS)        ",GYRO_YR);
 	  BSP_LCD_DisplayStringAtLine(7, buffer);
-	  sprintf(buffer,"    Vz=%3d.%3d(DPS)        ",GYRO_ZR[0],GYRO_ZR[1]);
+	  sprintf(buffer,"    Vz=%3g(DPS)        ",GYRO_ZR);
 	  BSP_LCD_DisplayStringAtLine(8, buffer);
 	  sprintf(buffer,"  Temp=%2g(C)        ",TempR);
 	  BSP_LCD_DisplayStringAtLine(9, buffer);
